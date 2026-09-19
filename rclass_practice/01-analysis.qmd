@@ -1,14 +1,14 @@
 ---
 title: Домашнее задание по Автоматизации обработки данных
 author:
-   - name: Юлия Ченгаева
+   - name: Юлия Ченгаева 
      url: https://github.com/ichengaeva
      roles: Пациенты
-   - name: Алена Вейс
-    url: https://github.com/veysao
+   - name: Юлия Ченгаева
+     url: https://github.com/ichengaeva
     roles: Лаборатория
-   - name: Сафин Амир
-    url: https://github.com/lechiticho
+   - name: Юлия Ченгаева
+     url: https://github.com/ichengaeva
     roles: Генотип APOE
 format:
   html:
