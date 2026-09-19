@@ -57,6 +57,7 @@ dm_raw <- read_csv("data/dm.csv", show_col_types = FALSE)
 
 # 3. Отбор нужных столбцов и переименование USUBJID в ID
 dm <- dm_raw |>
+  filter(ARM %in% c("Placebo", "Xanomeline Low Dose")) |>
   select(
     ID = USUBJID,
     AGE,
@@ -78,7 +79,7 @@ dm |>
 
 ```{r}
 # 4. Проверка: каждому участнику соответствует ровно одна строка
-duplicates <- dm_clean |>
+duplicates <- dm |>
   filter(duplicated(ID) | duplicated(ID, fromLast = TRUE))
 
 if (nrow(duplicates) > 0) {
@@ -113,7 +114,7 @@ Placebo Xanomeline Low Dose
 86                       84 
    Преобразуйте столбец `ARM` в фактор и выведите число участников в каждой группе.
 ```{r} 
-dm <- dm_clean |>
+dm <- dm |>
   filter(ARM %in% c("Placebo", "Xanomeline Low Dose")) |>
   mutate(ARM = as.factor(ARM))
 table(dm$ARM)
