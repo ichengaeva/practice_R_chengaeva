@@ -53,10 +53,10 @@ library(tidyverse)
 library(flextable)
 
 # 1. Импорт данных
-dm_raw <- read_csv("data/dm.csv")
+dm_raw <- read_csv("data/dm.csv", show_col_types = FALSE)
 
 # 3. Отбор нужных столбцов и переименование USUBJID в ID
-dm_clean <- dm_raw |>
+dm <- dm_raw |>
   select(
     ID = USUBJID,
     AGE,
@@ -66,7 +66,7 @@ dm_clean <- dm_raw |>
   )
 
 # Вывод первых строк
-dm_clean |>
+dm |>
   head(10) |>
   flextable() |>
   autofit()
@@ -136,45 +136,140 @@ dm
 - `LBDTC` / `LBDY` — дата / день измерения
 
 1. Импортируйте данные.
-2. Какой формат у этих данных: длинный или широкий? Объясните ответ.
-   Какое минимальное и максимальное число строк на одного пациента?
-3. На каких визитах выполняли измерения и какие лабораторные показатели измеряли?
-   Отдельно выведите или подчеркните визиты, на которых измеряли витамин B12.
-
 ```{r}
-# read_csv
-# select, rename
-# distinct, count
+lb_raw <- read_csv("data/lb.csv")
+```
+2. Какой формат у этих данных: длинный или широкий? Объясните ответ.
+Формат данных: Длинный (long format).
+Объяснение: Каждая строка содержит результат только одного конкретного лабораторного измерения в определенный визит, поэтому один и тот же пациент (USUBJID) встречается в датасете многократно в разных строках.
+
+   Какое минимальное и максимальное число строк на одного пациента? 
+   min 9 max 58
+```{r}
+lb_raw |>
+  count(USUBJID) |>
+  summarise(
+    min_rows = min(n),
+    max_rows = max(n)
+  )
+```   
+3. На каких визитах выполняли измерения и какие лабораторные показатели измеряли?
+
+# Все визиты и лабораторные показатели
+```{r}
+lb_raw |>
+  distinct(VISIT, LBTEST)
+```
+Отдельно выведите или подчеркните визиты, на которых измеряли витамин B12.
+# Визиты, на которых измеряли витамин B12
+Вывод: Лабораторный показатель Vitamin B12 измерялся у участников исследования только один раз — на этапе скрининга (SCREENING 1)
+```{r}
+lb_raw |>
+  filter(str_detect(LBTEST, regex("vitamin b12|b12", ignore_case = TRUE))) |>
+  distinct(VISIT, LBTEST)
 ```
 
 4. Оставьте только два лабораторных показателя своей команды, измеренных на визите `SCREENING 1`.
-5. После фильтрации выведите число измерений каждого показателя.
-
 ```{r}
-# left_join, semi_join
-# filter
+lb_filtered <- lb_raw |>
+  filter(
+    VISIT == "SCREENING 1",
+    LBTESTCD %in% c("HGB", "PLAT")
+  )
+lb_filtered
+```
+5. После фильтрации выведите число измерений каждого показателя.
+HGB 247
+PLAT 244
+```{r}
+lb_filtered |>
+  count(LBTESTCD)
 ```
 
 6. Переведите данные в широкий формат и сохраните в переменную `lb_wide`.
    В датафрейме должна быть одна строка на одного участника и по крайней мере два столбца с показателями вашей команды.
    Идентификатор участника должен находиться в столбце с названием `ID`.
+# 1. Отбираем колонки, переименовываем ID и разворачиваем в широкий формат
+```{r}
+lb_wide <- lb_filtered |>
+  select(USUBJID, LBTESTCD, LBSTRESN) |>
+  rename(ID = USUBJID) |>
+  pivot_wider(
+    names_from = LBTESTCD,
+    values_from = LBSTRESN
+  )
+```
+
+# 2. Проверка: выводим итоговую таблицу
 
 ```{r}
-# select
-# pivot_wider
-# distinct, count
+lb_wide
 ```
+
+# 3. Проверяем, что на каждого пациента ровно 1 строка
+```{r}
+lb_wide |>
+  count(ID) |>
+  filter(n > 1)
+``` 
 
 7. Вернитесь к пункту 1, где вы импортировали данные.
    Оставьте только участников своей команды и выполните код следующих пунктов заново.
    Используйте датафрейм `dm`, созданный координатором в разделе 1.1 выше и функции `left_join / semi_join / filter`.
-8. Проверьте, что `lb_wide` содержит ровно одну строку на одного участника.
-
+# 7. Фильтруем исходные данные lb_raw по пациентам нашей команды 4 из dm, затем оставляем визит SCREENING 1 и показатели HGB и PLAT
 ```{r}
-# stopifnot, stop
+lb_filtered <- lb_raw |>
+  semi_join(dm, by = c("USUBJID" = "ID")) |>
+  filter(
+    VISIT == "SCREENING 1",
+    LBTESTCD %in% c("HGB", "PLAT")
+  )
+lb_filtered
+```
+# Переводим отфильтрованные данные в широкий формат
+```{r}
+lb_wide <- lb_filtered |>
+  select(USUBJID, LBTESTCD, LBSTRESN) |>
+  rename(ID = USUBJID) |>
+  pivot_wider(
+    names_from = LBTESTCD,
+    values_from = LBSTRESN
+  )
+lb_wide
 ```
 
+8. Проверьте, что `lb_wide` содержит ровно одну строку на одного участника.
+```{r}
+stopifnot(
+  lb_wide |> count(ID) |> filter(n > 1) |> nrow() == 0
+)
+lb_wide
+```
+
+
 9. Дополнительное задание: вычислите `LBDY` самостоятельно (от даты первого приема препарата) и проверьте совпадает ли с оригинальным столбцом
+```{r}
+library(lubridate)
+```
+```{r}
+# 1. Берем исходные лаб. данные и подтягиваем RFSTDTC из таблицы dm
+lb_check <- lb_raw |>
+  left_join(dm |> select(ID, RFSTDTC), by = c("USUBJID" = "ID")) |>
+  # 2. Приводим даты к формату Date и считаем день исследования LBDY_calc
+  mutate(
+    LBDTC_dt = ymd(LBDTC, quiet = TRUE),
+    RFSTDTC_dt = ymd(RFSTDTC, quiet = TRUE),
+    diff_days = as.numeric(LBDTC_dt - RFSTDTC_dt),
+    LBDY_calc = if_else(diff_days >= 0, diff_days + 1, diff_days)
+  )
+# 3. Проверяем совпадение только для заполненных дат
+lb_check |>
+  filter(!is.na(LBDY), !is.na(LBDY_calc)) |>
+  summarise(
+    all_equal = all(LBDY == LBDY_calc),
+    mismatches = sum(LBDY != LBDY_calc)
+  )
+```
 
 ### 1.3. Витальные показатели
 
