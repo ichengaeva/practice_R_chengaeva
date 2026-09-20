@@ -1,15 +1,9 @@
 ---
 title: Домашнее задание по Автоматизации обработки данных
 author:
-   - name: Юлия Ченгаева 
-     url: https://github.com/ichengaeva
-     roles: Пациенты
-   - name: Юлия Ченгаева
-     url: https://github.com/ichengaeva
-    roles: Лаборатория
-   - name: Юлия Ченгаева
-     url: https://github.com/ichengaeva
-    roles: Генотип APOE
+  - name: Юлия Ченгаева
+    url: https://github.com/ichengaeva
+
 format:
   html:
     embed-resources: true
@@ -18,14 +12,15 @@ format:
 **Создайте ветку**, заполните сведения о себе выше и **сделайте Pull Request**.
 
 ```{r}
-#| include: false
-
+#| message: false
+#| warning: false
 library(tidyverse)
+library(flextable)
 ```
 
-**Вариант 4**
-* **Группы лечения (`ARM`):** Placebo, Xanomeline Low Dose
-* **Лабораторные показатели (`LBTESTCD`):** HGB, PLAT
+**Вариант 4** <br>
+* **Группы лечения (`ARM`):** Placebo, Xanomeline Low Dose <br>
+* **Лабораторные показатели (`LBTESTCD`):** HGB, PLAT <br>
 * **Визит для веса (`VISIT`):** WEEK 4
 
 
@@ -45,7 +40,7 @@ library(tidyverse)
 - `RFSTDTC` — дата первого приёма препарата
 
 1. Импортируйте данные.
-2. Какой формат у этих данных: длинный или широкий? Объясните ответ.
+2. Какой формат у этих данных: длинный или широкий? Объясните ответ.<br>
 Формат данных: Исходный датасет dm.csv представлен в широком формате (wide format), так как каждому участнику исследования соответствует ровно одна строка, а его параметры (возраст, пол, группа лечения) расположенны в отдельных столбцах.
 3. Оставьте только нужные столбцы и переименуйте `USUBJID` в `ID`.
 
@@ -55,7 +50,7 @@ library(flextable)
 # 1. Импорт данных
 dm_raw <- read_csv("data/dm.csv", show_col_types = FALSE)
 
-# 3. Отбор нужных столбцов и переименование USUBJID в ID
+# 2. Отбор нужных столбцов и переименование USUBJID в ID
 dm <- dm_raw |>
   filter(ARM %in% c("Placebo", "Xanomeline Low Dose")) |>
   select(
@@ -66,7 +61,7 @@ dm <- dm_raw |>
     RFSTDTC
   )
 
-# Вывод первых строк
+# 3. Вывод первых строк
 dm |>
   head(10) |>
   flextable() |>
@@ -90,14 +85,13 @@ if (nrow(duplicates) > 0) {
 }
 ```
 
-5. Выведите общее количество людей, оцененных для включения в исследование: 306 пациентов.
+5. Выведите общее количество людей, оцененных для включения в исследование.
 ```{r}
 total_screened <- nrow(dm_raw)
 total_screened
 ```
 6. Какой процент не прошел скрининг? 
-Всего оцененных участников: 306
-Не прошли скрининг: 52 (16.99%)
+
 ```{r}
 randomized_total <- dm_raw |>
   filter(!is.na(ARM) & ARM != "Screen Failure") |>
@@ -110,9 +104,7 @@ cat("Всего оцененных участников:", total_screened, "\n")
 cat("Не прошли скрининг:", screen_failures, sprintf("(%.2f%%)\n\n", pct_failed))
 ```
 7. Оставьте участников с группами лечения из вашего варианта.
-Placebo Xanomeline Low Dose 
-86                       84 
-   Преобразуйте столбец `ARM` в фактор и выведите число участников в каждой группе.
+Преобразуйте столбец `ARM` в фактор и выведите число участников в каждой группе.
 ```{r} 
 dm <- dm |>
   filter(ARM %in% c("Placebo", "Xanomeline Low Dose")) |>
@@ -122,7 +114,19 @@ table(dm$ARM)
 8. Сохраните финальный датафрейм в переменную `dm`.
 
 ```{r}
-dm
+#| message: false
+library(DT)
+
+dm |>
+  datatable(
+    options = list(
+      scrollY = "300px", # Высота окна с вертикальной прокруткой
+      paging = FALSE, # Вывод всех строк списком без разбивки по страницам
+      searching = FALSE, # Убрать строку поиска
+      info = FALSE
+    ),
+    rownames = FALSE
+  )
 ```
 
 ### 1.2. Лабораторные измерения
@@ -138,11 +142,12 @@ dm
 
 1. Импортируйте данные.
 ```{r}
-lb_raw <- read_csv("data/lb.csv")
+lb_raw <- read_csv("data/lb.csv", show_col_types = FALSE)
 ```
-2. Какой формат у этих данных: длинный или широкий? Объясните ответ.
-Формат данных: Длинный (long format).
-Объяснение: Каждая строка содержит результат только одного конкретного лабораторного измерения в определенный визит, поэтому один и тот же пациент (USUBJID) встречается в датасете многократно в разных строках.
+2. Какой формат у этих данных: длинный или широкий? Объясните ответ.<br>
+**Формат данных:** Длинный (long format).<br>
+**Объяснение:** Каждая строка содержит результат только одного конкретного лабораторного измерения в определенный визит, поэтому один и тот же пациент (USUBJID) встречается в датасете многократно в разных строках.
+
 
    Какое минимальное и максимальное число строк на одного пациента? 
    min 9 max 58
@@ -158,39 +163,57 @@ lb_raw |>
 
 # Все визиты и лабораторные показатели
 ```{r}
+#| message: false
+library(DT)
+
 lb_raw |>
-  distinct(VISIT, LBTEST)
+  distinct(VISIT, LBTEST) |>
+  datatable(
+    options = list(
+      scrollY = "250px", # высота таблицы с прокруткой
+      paging = FALSE, # без разбиения на страницы
+      searching = FALSE, # без строки поиска
+      info = FALSE
+    ),
+    rownames = FALSE
+  )
 ```
-Отдельно выведите или подчеркните визиты, на которых измеряли витамин B12.
-# Визиты, на которых измеряли витамин B12
+
+Отдельно выведите или подчеркните визиты, на которых измеряли витамин B12.<br>
 Вывод: Лабораторный показатель Vitamin B12 измерялся у участников исследования только один раз — на этапе скрининга (SCREENING 1)
 ```{r}
 lb_raw |>
   filter(str_detect(LBTEST, regex("vitamin b12|b12", ignore_case = TRUE))) |>
-  distinct(VISIT, LBTEST)
+  distinct(VISIT, LBTEST) |>
+  flextable()
 ```
 
 4. Оставьте только два лабораторных показателя своей команды, измеренных на визите `SCREENING 1`.
 ```{r}
+library(DT)
+
 lb_filtered <- lb_raw |>
   filter(
     VISIT == "SCREENING 1",
     LBTESTCD %in% c("HGB", "PLAT")
   )
-lb_filtered
+lb_filtered |>
+  datatable(options = list(pageLength = 10, scrollX = TRUE))
 ```
 5. После фильтрации выведите число измерений каждого показателя.
 HGB 247
 PLAT 244
 ```{r}
 lb_filtered |>
-  count(LBTESTCD)
+  count(LBTESTCD) |>
+  flextable()
 ```
 
-6. Переведите данные в широкий формат и сохраните в переменную `lb_wide`.
+6. Переведите данные в широкий формат и сохраните в переменную `lb_wide`.<br>
    В датафрейме должна быть одна строка на одного участника и по крайней мере два столбца с показателями вашей команды.
-   Идентификатор участника должен находиться в столбце с названием `ID`.
-# 1. Отбираем колонки, переименовываем ID и разворачиваем в широкий формат
+   Идентификатор участника должен находиться в столбце с названием `ID`.<br>
+
+Отбираем колонки, переименовываем ID и разворачиваем в широкий формат
 ```{r}
 lb_wide <- lb_filtered |>
   select(USUBJID, LBTESTCD, LBSTRESN) |>
@@ -201,33 +224,69 @@ lb_wide <- lb_filtered |>
   )
 ```
 
-# 2. Проверка: выводим итоговую таблицу
+Проверка: выводим итоговую таблицу
 
 ```{r}
-lb_wide
+#| message: false
+library(DT)
+lb_wide |>
+  datatable(
+    options = list(
+      scrollY = "300px", # вертикальная прокрутка
+      paging = FALSE, # сплошная прокрутка без страниц
+      searching = FALSE, # убрать строку поиска
+      info = FALSE # убрать подпись снизу
+    ),
+    rownames = FALSE
+  )
 ```
 
-# 3. Проверяем, что на каждого пациента ровно 1 строка
+Проверяем, что на каждого пациента ровно 1 строка
 ```{r}
-lb_wide |>
+duplicates <- lb_wide |>
   count(ID) |>
   filter(n > 1)
+
+if (nrow(duplicates) == 0) {
+  cat(
+    "Проверка пройдена: дубликатов не обнаружено, на каждого пациента ровно 1 строка."
+  )
+} else {
+  cat("Внимание! Обнаружены дубликаты:\n")
+  print(duplicates)
+}
 ``` 
 
 7. Вернитесь к пункту 1, где вы импортировали данные.
    Оставьте только участников своей команды и выполните код следующих пунктов заново.
-   Используйте датафрейм `dm`, созданный координатором в разделе 1.1 выше и функции `left_join / semi_join / filter`.
-# 7. Фильтруем исходные данные lb_raw по пациентам нашей команды 4 из dm, затем оставляем визит SCREENING 1 и показатели HGB и PLAT
+   Используйте датафрейм `dm`, созданный координатором в разделе 1.1 выше и функции `left_join / semi_join / filter`.<br>
+
+Фильтруем исходные данные lb_raw по пациентам нашей команды 4 из dm, затем оставляем визит SCREENING 1 и показатели HGB и PLAT
+
 ```{r}
+#| message: false
+library(DT)
+
 lb_filtered <- lb_raw |>
   semi_join(dm, by = c("USUBJID" = "ID")) |>
   filter(
     VISIT == "SCREENING 1",
     LBTESTCD %in% c("HGB", "PLAT")
   )
-lb_filtered
+
+lb_filtered |>
+  datatable(
+    options = list(
+      scrollY = "300px", # вертикальная прокрутка
+      scrollX = TRUE, # горизонтальная прокрутка для 13 колонок
+      paging = FALSE, # сплошной список без страниц
+      searching = FALSE, # убрать строку поиска
+      info = FALSE # убрать подпись снизу
+    ),
+    rownames = FALSE
+  )
 ```
-# Переводим отфильтрованные данные в широкий формат
+Переводим отфильтрованные данные в широкий формат
 ```{r}
 lb_wide <- lb_filtered |>
   select(USUBJID, LBTESTCD, LBSTRESN) |>
@@ -236,41 +295,78 @@ lb_wide <- lb_filtered |>
     names_from = LBTESTCD,
     values_from = LBSTRESN
   )
-lb_wide
+lb_wide |>
+  datatable(
+    options = list(
+      scrollY = "300px", # Вертикальный скролл
+      paging = FALSE, # Без разбивки на страницы
+      searching = FALSE, # Без строки поиска
+      info = FALSE
+    ),
+    rownames = FALSE
+  )
 ```
 
 8. Проверьте, что `lb_wide` содержит ровно одну строку на одного участника.
 ```{r}
+#| message: false
 stopifnot(
   lb_wide |> count(ID) |> filter(n > 1) |> nrow() == 0
 )
-lb_wide
+
+# Красивый вывод с прокруткой
+lb_wide |>
+  DT::datatable(
+    options = list(
+      scrollY = "250px",
+      paging = FALSE,
+      searching = FALSE,
+      info = FALSE
+    ),
+    rownames = FALSE
+  )
 ```
 
 
 9. Дополнительное задание: вычислите `LBDY` самостоятельно (от даты первого приема препарата) и проверьте совпадает ли с оригинальным столбцом
+
+
 ```{r}
+#| message: false
+
 library(lubridate)
-```
-```{r}
-# 1. Берем исходные лаб. данные и подтягиваем RFSTDTC из таблицы dm
+
+# 1. Расчет LBDY
 lb_check <- lb_raw |>
   left_join(dm |> select(ID, RFSTDTC), by = c("USUBJID" = "ID")) |>
-  # 2. Приводим даты к формату Date и считаем день исследования LBDY_calc
   mutate(
     LBDTC_dt = ymd(LBDTC, quiet = TRUE),
     RFSTDTC_dt = ymd(RFSTDTC, quiet = TRUE),
     diff_days = as.numeric(LBDTC_dt - RFSTDTC_dt),
     LBDY_calc = if_else(diff_days >= 0, diff_days + 1, diff_days)
   )
-# 3. Проверяем совпадение только для заполненных дат
-lb_check |>
+
+# 2. Проверка совпадения с оригинальным столбцом
+check_res <- lb_check |>
   filter(!is.na(LBDY), !is.na(LBDY_calc)) |>
   summarise(
     all_equal = all(LBDY == LBDY_calc),
     mismatches = sum(LBDY != LBDY_calc)
   )
+
+if (check_res$all_equal) {
+  cat(
+    "✔ Проверка успешно пройдена: рассчитанный LBDY полностью совпадает с оригинальным\n"
+  )
+} else {
+  cat(
+    "✖ Обнаружены расхождения в LBDY (количество ошибок:",
+    check_res$mismatches,
+    ")\n"
+  )
+}
 ```
+
 
 ### 1.3. Витальные показатели
 
