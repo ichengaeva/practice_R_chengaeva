@@ -1,0 +1,1588 @@
+---
+title: Домашнее задание по автоматизации обработки данных
+execute:
+  message: false
+  warning: false
+author:
+   - name: Юлия Ченгаева
+     url: https://github.com/ichengaeva
+     roles: Пациенты
+   - name: Алена Вейс
+     url: https://github.com/veysao
+     roles: Лаборатория
+   - name: Наталья Кичигина
+     url: https://github.com/NataKich
+     roles: Витальные показатели
+   - name: Амир Сафин
+     url: https://github.com/lechiticho
+     roles: Генотип APOE
+format:
+  html: 
+    embed-resources: true
+    df-print: paged
+---
+
+**Создайте ветку**, заполните сведения о себе выше и **сделайте Pull Request**.
+
+```{r}
+#| include: false
+library(tidyverse)
+# пакеты подключаются в первом чанке
+library(tidyverse)
+library(flextable)
+library(gtsummary)
+```
+
+**Вариант 4** <br>
+* **Группы лечения (`ARM`):** Placebo, Xanomeline Low Dose <br>
+* **Лабораторные показатели (`LBTESTCD`):** HGB, PLAT <br>
+* **Визит для веса (`VISIT`):** WEEK 4
+
+
+## 1. Импорт и очистка данных
+
+Каждый выполняет в своей ветке.
+
+### 1.1. Пациенты
+
+В файле `data/dm.csv` содержатся демографические данные участников исследования.
+Вам понадобятся следующие столбцы:
+
+- `USUBJID` — уникальный идентификатор участника
+- `AGE` — возраст на момент скрининга, полных лет
+- `SEX` — пол участника
+- `ARM` — группа лечения
+- `RFSTDTC` — дата первого приёма препарата
+
+1. Импортируйте данные.
+2. Какой формат у этих данных: длинный или широкий? Объясните ответ.
+Формат данных: Исходный датасет dm.csv представлен в широком формате (wide format), так как каждому участнику исследования соответствует ровно одна строка, а его параметры (возраст, пол, группа лечения) расположенны в отдельных столбцах.
+3. Оставьте только нужные столбцы и переименуйте `USUBJID` в `ID`.
+
+```{r}
+library(flextable)
+
+# 1. Импорт данных
+dm_raw <- read_csv("dm.csv", show_col_types = FALSE)
+
+# 3. Отбор нужных столбцов и переименование USUBJID в ID
+dm <- dm_raw |>
+  filter(ARM %in% c("Placebo", "Xanomeline Low Dose")) |>
+  select(
+    ID = USUBJID,
+    AGE,
+    SEX,
+    ARM,
+    RFSTDTC
+  )
+
+# Вывод первых строк
+dm |>
+  head(10) |>
+  flextable() |>
+  autofit()
+```
+
+4. Проверьте, что каждому участнику соответствует ровно одна строка.
+   Если идентификатор участника встречается несколько раз, выведите все такие строки.
+   Проверка пройдена: все ID участников уникальны.
+
+```{r}
+# 4. Проверка: каждому участнику соответствует ровно одна строка
+duplicates <- dm |>
+  filter(duplicated(ID) | duplicated(ID, fromLast = TRUE))
+
+if (nrow(duplicates) > 0) {
+  print(duplicates)
+  stop("Ошибка: обнаружены дублирующиеся идентификаторы участников!")
+} else {
+  message("Проверка пройдена: все ID участников уникальны.")
+}
+```
+
+5. Выведите общее количество людей, оцененных для включения в исследование.
+```{r}
+total_screened <- nrow(dm_raw)
+total_screened
+```
+6. Какой процент не прошел скрининг?
+```{r}
+randomized_total <- dm_raw |>
+  filter(!is.na(ARM) & ARM != "Screen Failure") |>
+  nrow()
+
+screen_failures <- total_screened - randomized_total
+pct_failed <- (screen_failures / total_screened) * 100
+
+cat("Всего оцененных участников:", total_screened, "\n")
+cat("Не прошли скрининг:", screen_failures, sprintf("(%.2f%%)\n\n", pct_failed))
+```
+7. Оставьте участников с группами лечения из вашего варианта.
+Преобразуйте столбец `ARM` в фактор и выведите число участников в каждой группе.
+
+```{r}
+unique(dm_raw$ARM)
+```
+
+```{r} 
+dm <- dm |>
+  filter(ARM %in% c("Placebo", "Xanomeline Low Dose")) |>
+  mutate(ARM = as.factor(ARM))
+table(dm$ARM)
+```
+8. Сохраните финальный датафрейм в переменную `dm`.
+
+```{r}
+#| message: false
+library(DT)
+
+dm |>
+  datatable(
+    options = list(
+      scrollY = "300px", # Высота окна с вертикальной прокруткой
+      paging = FALSE, # Вывод всех строк списком без разбивки по страницам
+      searching = FALSE, # Убрать строку поиска
+      info = FALSE
+    ),
+    rownames = FALSE
+  )
+```
+
+### 1.2. Лабораторные измерения
+
+Файл `data/lb.csv` содержит результаты лабораторных измерений участников исследования.
+Вам понадобятся следующие столбцы:
+
+- `USUBJID` — уникальный идентификатор участника
+- `LBTESTCD` / `LBTEST` — код / название лабораторного теста
+- `LBSTRESN` — числовой результат измерения
+- `VISIT` — визит измерения
+- `LBDTC` / `LBDY` — дата / день измерения
+
+1. Импортируйте данные.
+2. Какой формат у этих данных: длинный или широкий? Объясните ответ.
+Это длинные данные, т.к. на одного участника приходится несколько строк. 
+   Какое минимальное и максимальное число строк на одного пациента?
+   Минимальное - 9, максимальное - 58
+3. На каких визитах выполняли измерения и какие лабораторные показатели измеряли?
+Визиты:  WEEK 4, WEEK 6, WEEK 8, WEEK 12, SCREENING 1, WEEK 2, BASELINE  
+Лабораторные показатели: Basophils, Eosinophils, Hemoglobin, Lymphocytes, Monocytes, Platelet, Erythrocytes, Thyrotropin, Vitamin B12, Leukocytes 
+   Отдельно выведите или подчеркните визиты, на которых измеряли витамин B12.
+
+```{r}
+library(tidyverse)
+data <- read_csv("lb.csv")
+
+data <- data |>
+  semi_join(dm, by = c("USUBJID" = "ID"))
+
+rows <- data |>
+  count(USUBJID)
+
+rows |>
+  summarise(
+    "Минимальное количество строк" = min(n),
+    "Максимальное количество строк" = max(n)
+  ) |>
+  flextable() |>
+  set_caption("Количество строк в датасете")
+
+visits <- data |>
+  distinct(VISIT)
+flextable(visits) |>
+  set_header_labels(VISIT = "Визиты") |>
+  autofit()
+
+tests <- data |>
+  distinct(LBTEST)
+flextable(tests) |>
+  set_header_labels(LBTEST = "Виды лабораторных исследований") |>
+  autofit()
+
+vit <- data |>
+  filter(LBTEST == "Vitamin B12")
+datatable(
+  vit,
+  options = list(
+    scrollY = "400px",
+    scrollX = TRUE,
+    paging = FALSE,
+    searching = FALSE,
+    info = FALSE
+  ),
+  rownames = FALSE
+)
+
+# select, rename
+# distinct, count
+```
+
+4. Оставьте только два лабораторных показателя своей команды, измеренных на визите `SCREENING 1`.
+5. После фильтрации выведите число измерений каждого показателя.
+
+```{r}
+scr1 <- data |>
+  filter(
+    (LBTESTCD == "HGB" | LBTESTCD == "PLAT") &
+      VISIT == "SCREENING 1"
+  ) |>
+  count(LBTESTCD)
+flextable(scr1) |>
+  set_header_labels(
+    LBTESTCD = "Показатель",
+    n = "Количество измерений"
+  ) |>
+  autofit()
+```
+
+6. Переведите данные в широкий формат и сохраните в переменную `lb_wide`.
+   В датафрейме должна быть одна строка на одного участника и по крайней мере два столбца с показателями вашей команды.
+   Идентификатор участника должен находиться в столбце с названием `ID`.
+
+```{r}
+lb_wide <- data |>
+  filter(
+    LBTESTCD %in% c("HGB", "PLAT"),
+    VISIT == "SCREENING 1"
+  ) |>
+  select(
+    ID = USUBJID,
+    LBTESTCD,
+    LBSTRESN
+  ) |>
+  pivot_wider(
+    names_from = LBTESTCD,
+    values_from = LBSTRESN
+  )
+datatable(
+  lb_wide,
+  options = list(
+    scrollY = "400px",
+    scrollX = TRUE,
+    paging = FALSE,
+    searching = FALSE,
+    info = FALSE
+  ),
+  rownames = FALSE
+)
+```
+
+7. Вернитесь к пункту 1, где вы импортировали данные.
+   Оставьте только участников своей команды и выполните код следующих пунктов заново.
+   Используйте датафрейм `dm`, созданный координатором в разделе 1.1 выше и функции `left_join / semi_join / filter`.
+8. Проверьте, что `lb_wide` содержит ровно одну строку на одного участника.
+
+```{r}
+if (any(table(lb_wide$ID) != 1)) {
+  stop("lb_wide содержит не одну строку на участника")
+}
+```
+
+9. Дополнительное задание: вычислите `LBDY` самостоятельно (от даты первого приема препарата) и проверьте совпадает ли с оригинальным столбцом
+
+```{r}
+data_lbdy <- data |>
+  filter(VISIT != "SCREENING 1")
+
+LBDY1 <- data_lbdy |>
+  left_join(
+    dm |> select(ID, RFSTDTC),
+    by = c("USUBJID" = "ID")
+  )
+
+LBDY1 <- LBDY1 |>
+  mutate(
+    LBDY_calc = as.integer(as.Date(LBDTC) - as.Date(RFSTDTC)) + 1
+  )
+
+check_LBDY <- LBDY1 |>
+  summarise(
+    `Всего записей` = n(),
+    `Совпадений LBDY` = sum(LBDY_calc == LBDY, na.rm = TRUE),
+    `Расхождений` = sum(LBDY_calc != LBDY | is.na(LBDY_calc) != is.na(LBDY))
+  ) |>
+  flextable() |>
+  autofit()
+
+check_LBDY
+```
+
+### 1.3. Витальные показатели
+
+Файл `data/vs.xlsx` содержит результаты измерений витальных показателей участников исследования, включая рост и вес.
+Вам понадобятся следующие столбцы:
+
+- `USUBJID` — уникальный идентификатор участника
+- `VSTESTCD` / `VSTEST` — код / название измеряемого показателя
+- `VSSTRESN` — числовой результат измерения
+- `VISIT` — визит исследования
+- `VSDTC` / `VSDY` — дата / день визита
+
+1. Импортируйте данные.
+
+2. Какой формат у этих данных: длинный или широкий? Объясните ответ. 
+
+2.1. Формат данных длинный, так как в столбце ID число уникальных ID  254, а количество всех ID 15764, при широком формате количество строк равнялось бы количеству участников. В столбце VSTESTCD также имеется несколько видов измерения: DIABP, HEIGHT, PULSE, SYSBP, WEIGHT. При широком формате такие измерения должны находиться в разных столбцах. Нет интересующих измерений HEIGHT и вес WEIGHT в отдельных столбах.
+
+2.2. Какое минимальное и максимальное число строк на одного участника?
+
+Минимальное количество строк на одного участника - 21 <br>
+Максимальное количество строк - 71
+
+3. На каких визитах измеряли рост (`HEIGHT`) и вес (`WEIGHT`)? 
+
+Рост измеряли на визите SCREENING 1 <br> 
+Вес измеряли на визитах SCREENING 1, BASELINE, WEEK 2, WEEK 4, WEEK 6, WEEK 8, WEEK 12. 
+
+4. Импорт данных и очистка.
+```{r}
+vs <- readxl::read_excel("vs.xlsx") |>
+  select(USUBJID, VSTESTCD, VSTEST, VSSTRESN, VISIT, VSDTC, VSDY) |>
+  rename(ID = USUBJID)
+# Вывод первых строк в стиле flextable
+vs |>
+  head(10) |>
+  flextable() |>
+  autofit()
+```
+
+4.1 Какое минимальное и максимальное число строк на одного участника?
+```{r}
+vs |>
+  count(ID) |>
+  summarise(
+    `Минимальное число строк` = min(n),
+    `Максимальное число строк` = max(n)
+  ) |>
+  flextable() |>
+  autofit()
+```
+
+4.2 На каких визитах измеряли рост (HEIGHT) и вес (WEIGHT)?
+```{r}
+vs |>
+  filter(VSTESTCD %in% c("HEIGHT", "WEIGHT")) |>
+  distinct(VSTESTCD, VISIT) |>
+  rename(`Показатель` = VSTESTCD, `Визит` = VISIT) |>
+  flextable() |>
+  autofit()
+```
+
+4.3 Оставьте измерения роста и веса на визите `SCREENING 1`, а также измерения веса на визите вашей команды.
+
+```{r}
+vs_filtered <- vs |>
+  filter(
+    (VSTESTCD == "HEIGHT" & VISIT == "SCREENING 1") |
+      (VSTESTCD == "WEIGHT" & VISIT == "SCREENING 1") |
+      (VSTESTCD == "WEIGHT" & VISIT == "WEEK 4")
+  )
+
+# Вывод отфильтрованных данных в виде таблицы
+vs_filtered |>
+  head(10) |>
+  flextable() |>
+  autofit()
+```
+
+5. Переведите данные в широкий формат и сохраните в переменной `vs_wide`.
+   В датафрейме должны быть столбцы для всех трёх отобранных измерений.
+   Подсказка: значение, которое вы передаёте в `names_from`, должно быть уникальным для каждого участника. Проверьте это до вызова `pivot_wider()`.
+   Идентификатор участника должен находиться в столбце с названием `ID`.
+
+```{r}
+# Проверка уникальности (без вывода служебного tibble)
+stopifnot(nrow(vs_filtered |> count(ID, VSTESTCD, VISIT) |> filter(n > 1)) == 0)
+
+# Создание составной колонки name и перевод в широкий формат
+vs_wide <- vs_filtered |>
+  mutate(name = str_c(VSTESTCD, VISIT, sep = "_")) |>
+  pivot_wider(id_cols = ID, names_from = name, values_from = VSSTRESN)
+
+# Вывод результата
+vs_wide |>
+  head(10) |>
+  flextable() |>
+  autofit()
+```
+
+7. Вернитесь к пункту 1, где вы импортировали данные.
+   Оставьте только участников своей команды и выполните код следующих пунктов заново.
+   Используйте датафрейм `dm`, созданный координатором в разделе 1.1 выше и функции `left_join / semi_join / filter`.
+8. Проверьте, что `vs_wide` содержит ровно одну строку на участника.
+
+```{r}
+# Фильтрация участников команды и нужных измерений
+vs_my_team <- vs |> semi_join(dm, by = "ID")
+
+vs_filtered_team <- vs_my_team |>
+  filter(
+    (VSTESTCD == "HEIGHT" & VISIT == "SCREENING 1") |
+      (VSTESTCD == "WEIGHT" & VISIT == "SCREENING 1") |
+      (VSTESTCD == "WEIGHT" & VISIT == "WEEK 4")
+  )
+
+# Перевод в широкий формат
+vs_wide_team <- vs_filtered_team |>
+  mutate(name = str_c(VSTESTCD, VISIT, sep = "_")) |>
+  pivot_wider(id_cols = ID, names_from = name, values_from = VSSTRESN)
+
+# Проверка уникальности: ровно одна строка на участника
+stopifnot(nrow(vs_wide_team) == dplyr::n_distinct(vs_wide_team$ID))
+
+# Вывод итоговой таблицы
+vs_wide_team |>
+  DT::datatable(
+    options = list(
+      pageLength = 10, # Показывать по 10 строк
+      scrollX = TRUE, # Включить горизонтальную прокрутку
+      autoWidth = TRUE
+    ),
+    filter = "top" # Добавить поля поиска/фильтрации над каждым столбцом
+  )
+```
+
+9. Дополнительное задание: вычислите `VSDY` самостоятельно (от даты первого приема препарата) и проверьте совпадает ли с оригинальным столбцом
+```{r}
+# Вычисление VSDY вручную и проверка с оригинальным столбцом
+vs_calc <- vs_my_team |>
+  left_join(dm |> select(ID, RFSTDTC), by = "ID") |>
+  mutate(
+    # Приводим к формату Date для корректного вычитания
+    date_visit = as.Date(VSDTC),
+    date_first_dose = as.Date(RFSTDTC),
+    diff_days = as.numeric(date_visit - date_first_dose),
+
+    # Правило CDISC SDTM (день 0 отсутствует)
+    vsdy_calc = if_else(diff_days >= 0, diff_days + 1, diff_days)
+  )
+
+# Проверка: совпадают ли расчётный VSDY и оригинальный VSDY
+check_vsdy <- vs_calc |>
+  summarise(
+    `Всего записей` = n(),
+    `Совпадений VSDY` = sum(vsdy_calc == VSDY, na.rm = TRUE),
+    `Расхождений` = sum(vsdy_calc != VSDY | is.na(vsdy_calc) != is.na(VSDY))
+  ) |>
+  flextable() |>
+  autofit()
+
+check_vsdy
+```
+
+### 1.4. Генотип APOE
+
+Файл `data/gf.csv` содержит результаты генотипирования участников исследования.
+Вам понадобятся следующие столбцы:
+
+- `USUBJID` — уникальный идентификатор участника
+- `GFORRES` — выявленный генотип
+- `GFSYM` — символ гена
+- `GFPVRID` — идентификатор генетического варианта
+- `VISIT` — визит исследования
+- `GFDTC` / `GFDY` — дата / день генотипировани
+
+1. Импортируйте данные.
+2. Какой формат у этих данных: длинный или широкий? Объясните ответ.
+* У этих данных длинный формат, так как на одного пациента приходится несколько строк 
+Какое минимальное и максимальное число строк на одного участника?
+* 12 строк на каждого участника (согласно команде summarise).
+
+```{r}
+gf <- read_csv('gf.csv', show_col_types = FALSE) |>
+  semi_join(dm, by = c("USUBJID" = "ID")) |>
+  rename(ID = USUBJID)
+summary <- gf |>
+  select(ID) |>
+  count(ID) |>
+  summarise(min_rows = min(n), max_rows = max(n))
+summary
+```
+
+3. Оставьте только ген `APOE` и варианты с идентификаторами `rs429358` и `rs7412`.
+
+```{r}
+gf_filter <- gf |>
+  filter(GFSYM == "APOE" & GFPVRID %in% c("rs429358", "rs7412"))
+```
+
+4. По таблице ниже определите генотип APOE для каждого участника.
+   Для комбинации, которой нет в таблице, присвойте значение `NA`.
+
+| rs429358 | rs7412 | Генотип APOE |
+|----------|--------|--------------|
+|   T/T    |  T/T   |    ε2/ε2     |
+|   T/T    |  C/T   |    ε2/ε3     |
+|   T/C    |  C/T   |    ε2/ε4     |
+|   T/T    |  C/C   |    ε3/ε3     |
+|   T/C    |  C/C   |    ε3/ε4     |
+|   C/C    |  C/C   |    ε4/ε4     |
+
+```{r}
+# Перевод в широкий формат и определение генотипа
+gf_apoe_wide <- gf_filter |>
+  select(ID, GFPVRID, GFORRES) |>
+  pivot_wider(names_from = GFPVRID, values_from = GFORRES) |>
+  mutate(
+    gf_genotype_apoe = case_when(
+      rs429358 == "T/T" & rs7412 == "T/T" ~ "ε2/ε2",
+      rs429358 == "T/T" & rs7412 == "C/T" ~ "ε2/ε3",
+      rs429358 == "T/C" & rs7412 == "C/T" ~ "ε2/ε4",
+      rs429358 == "T/T" & rs7412 == "C/C" ~ "ε3/ε3",
+      rs429358 == "T/C" & rs7412 == "C/C" ~ "ε3/ε4",
+      rs429358 == "C/C" & rs7412 == "C/C" ~ "ε4/ε4",
+      TRUE ~ NA_character_
+    )
+  )
+```
+
+5. Выведите число участников с каждым генотипом APOE.
+```{r}
+gf_apoe_wide |>
+  count(gf_genotype_apoe, name = "Количество") |>
+  rename(`Генотип APOE` = gf_genotype_apoe) |>
+  flextable() |>
+  autofit()
+```
+
+6. Сохраните итоговый датафрейм в переменную `gf_wide`.
+   Идентификатор участника должен находиться в столбце `ID`.
+
+```{r}
+gf_wide <- gf_apoe_wide |>
+  select(ID, gf_genotype_apoe)
+```
+
+7. Вернитесь к пункту 1, где вы импортировали данные.
+   Оставьте только участников своей команды и выполните код следующих пунктов заново.
+   Используйте датафрейм `dm`, созданный координатором в разделе 1.1 выше и функции `left_join / semi_join / filter`.
+
+
+```{r}
+gf <- read_csv('gf.csv', show_col_types = FALSE) |>
+  semi_join(dm, by = c("USUBJID" = "ID")) |>
+  rename(ID = USUBJID)
+summary <- gf |>
+  select(ID) |>
+  count(ID) |>
+  summarise(min_rows = min(n), max_rows = max(n))
+gf_filter <- gf |>
+  filter(GFSYM == "APOE" & GFPVRID %in% c("rs429358", "rs7412"))
+gf_apoe_wide <- gf_filter |>
+  select(ID, GFPVRID, GFORRES) |>
+  pivot_wider(names_from = GFPVRID, values_from = GFORRES) |>
+  mutate(
+    gf_genotype_apoe = case_when(
+      rs429358 == "T/T" & rs7412 == "T/T" ~ "ε2/ε2",
+      rs429358 == "T/T" & rs7412 == "C/T" ~ "ε2/ε3",
+      rs429358 == "T/C" & rs7412 == "C/T" ~ "ε2/ε4",
+      rs429358 == "T/T" & rs7412 == "C/C" ~ "ε3/ε3",
+      rs429358 == "T/C" & rs7412 == "C/C" ~ "ε3/ε4",
+      rs429358 == "C/C" & rs7412 == "C/C" ~ "ε4/ε4",
+      TRUE ~ NA_character_
+    )
+  )
+gf_apoe_wide |>
+  count(gf_genotype_apoe, name = "Количество") |>
+  rename(`Генотип APOE` = gf_genotype_apoe) |>
+  flextable() |>
+  autofit()
+gf_wide <- gf_apoe_wide |>
+  select(ID, gf_genotype_apoe)
+```
+
+
+
+8. Проверьте, что `gf_wide` содержит ровно одну строку на участника.
+
+```{r}
+stopifnot(nrow(gf_wide) == n_distinct(gf_wide$ID))
+
+# stopifnot, stop
+```
+
+9. Дополнительное задание: вычислите `GFDY` самостоятельно (от даты первого приема препарата) и проверьте совпадает ли с оригинальным столбцом
+
+## 2. Объединение данных
+
+Этот раздел выполняет координатор. Он переносит в основную ветку `main` пункты 1.2-1.4, выполненные участниками в своих ветках.
+
+После объединения веток отчёт должен создавать четыре датафрейма: `dm`, `lb_wide`, `vs_wide` и `gf_wide`.
+Все датафреймы должны быть в широком формате: по одной строке на участника.
+Присоедините `lb_wide`, `vs_wide` и `gf_wide` к `dm` по столбцу `ID`.
+Сохраните результат в отдельную переменную для дальнейшего анализа.
+
+```{r}
+# Переименование
+dm <- dm |>
+  rename(any_of(c(ID = "USUBJID")))
+
+# Объединение датафреймов
+df_merged <- dm |>
+  left_join(lb_wide, by = "ID") |>
+  left_join(vs_wide, by = "ID") |>
+  left_join(gf_wide, by = "ID")
+
+# Проверки
+stopifnot(nrow(df_merged) == nrow(dm))
+stopifnot(nrow(df_merged) == n_distinct(df_merged$ID))
+
+# Вывод таблицы
+library(DT)
+
+datatable(
+  df_merged,
+  options = list(
+    scrollX = TRUE,
+    pageLength = 10,
+    dom = 't' # оставляет только чистую таблицу
+  ),
+  rownames = FALSE
+)
+```
+
+Проверьте, что число строк в результате совпадает с числом участников в `dm` и что не появилось повторяющихся значений `ID`.
+
+```{r}
+# Проверка количества строк и отсутствия повторяющихся ID
+nrow(df_merged) == nrow(dm)
+n_distinct(df_merged$ID) == nrow(df_merged)
+
+stopifnot(
+  nrow(df_merged) == nrow(dm),
+  n_distinct(df_merged$ID) == nrow(df_merged)
+)
+```
+
+Для каждого столбца итогового датафрейма выведите число непустых и число пропущенных значений.
+
+```{r}
+tibble(
+  variable = colnames(df_merged),
+  not_NA = colSums(!is.na(df_merged)),
+  NA_count = colSums(is.na(df_merged))
+)
+```
+
+```{r}
+head(df_merged)
+```
+
+
+## 3. Описательные статистики и отчёт
+
+Каждый выполняет свой подраздел в отдельной ветке, используя объединенные данные.
+Перед началом работы переключитесь на ветку `main`, получите актуальные изменения и убедитесь, что вам доступен объединённый датафрейм с данными других членов команды.
+
+Координатор объединяет подразделы и проверяет результаты.
+Проверьте согласованность значений в таблицах между разделами:
+например, минимум и максимум по всей таблице должны совпадать независимо от группировки.
+Если есть расхождения, найдите причину и опишите её: например, различия в фильтрации, группировке или обработке пропусков.
+```{r}
+# 1. Общие минимум и максимум по лабораторным показателям (HGB, PLAT) во всем датасете
+df_merged |>
+  summarise(
+    across(
+      c(HGB, PLAT),
+      list(
+        min = ~ min(.x, na.rm = TRUE),
+        max = ~ max(.x, na.rm = TRUE)
+      )
+    ),
+    total_n = sum(!is.na(HGB))
+  )
+```
+**Комментарии** <br>
+Мы зафиксировали глобальные диапазоны для обоих ключевых лабораторных показателей по всему датасету ($N = 166$):<br>
+Гемоглобин (HGB): от 6.39 до 10.43<br>
+Тромбоциты (PLAT): от 119 до 572
+
+### 3.1. Анализ лабораторных результатов
+
+1. Для каждого лабораторного показателя рассчитайте статистики в каждой группе лечения. В таблице приведите:
+   - число непустых значений
+   - число пропущенных значений
+   - среднее (стандартное отклонение)
+   - медиана [25-й, 75-й процентили]
+   - минимум - максимум
+2. Постройте такую же таблицу для носителей и неносителей аллеля ε4.
+3. Оформите результаты в таблицы `flextable` с заголовками на русском или английском языке с указанием единиц измерения.
+4. Кратко прокомментируйте результаты, приведённые в таблицах.
+
+```{r}
+# Расчитываю пропущенные значения
+lb_missing <- df_merged |>
+  group_by(ARM) |>
+  summarise(
+    HGB_non_missing = sum(!is.na(HGB)),
+    HGB_missing = sum(is.na(HGB)),
+    PLAT_non_missing = sum(!is.na(PLAT)),
+    PLAT_missing = sum(is.na(PLAT))
+  )
+flextable(lb_missing) |>
+  set_header_labels(
+    HGB_non_missing = "Заполненные значения гемоглобина, шт.",
+    HGB_missing = "Пропущенные значения гемоглобина, шт.",
+    ARM = "Группа",
+    PLAT_non_missing = "Заполненные значения тромбоцитов, шт.",
+    PLAT_missing = "Пропущенные значения тромбоцитов, шт."
+  ) |>
+  autofit()
+```
+
+```{r}
+#Расчитываю описательные статистики по группам лечения
+stats_HGB <- df_merged |>
+  group_by(ARM) |>
+  summarise(
+    HGB_mean = mean(HGB, na.rm = TRUE),
+    HGB_SD = sd(HGB, na.rm = TRUE),
+    HGB_25_q = quantile(HGB, 0.25, na.rm = TRUE),
+    HGB_mediana = quantile(HGB, 0.5, na.rm = TRUE),
+    HGB_75_q = quantile(HGB, 0.75, na.rm = TRUE),
+    HGB_min = min(HGB, na.rm = TRUE),
+    HGB_max = max(HGB, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  mutate(
+    across(where(is.numeric), ~ round(.x, 2))
+  )
+
+flextable(stats_HGB) |>
+  set_header_labels(
+    ARM = "Группа",
+    HGB_mean = "Среднее (ммоль/л)",
+    HGB_SD = "SD (ммоль/л)",
+    HGB_25_q = "Q1 (ммоль/л)",
+    HGB_mediana = "Медиана (ммоль/л)",
+    HGB_75_q = "Q3 (ммоль/л)",
+    HGB_min = "Min (ммоль/л)",
+    HGB_max = "Max (ммоль/л)"
+  ) |>
+  set_caption("Описательные статистики уровня гемоглобина по группам") |>
+  autofit()
+
+stats_PLAT <- df_merged |>
+  group_by(ARM) |>
+  summarise(
+    PLAT_mean = mean(PLAT, na.rm = TRUE),
+    PLAT_SD = sd(PLAT, na.rm = TRUE),
+    PLAT_25_q = quantile(PLAT, 0.25, na.rm = TRUE),
+    PLAT_mediana = quantile(PLAT, 0.5, na.rm = TRUE),
+    PLAT_75_q = quantile(PLAT, 0.75, na.rm = TRUE),
+    PLAT_min = min(PLAT, na.rm = TRUE),
+    PLAT_max = max(PLAT, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  mutate(
+    across(where(is.numeric), ~ round(.x, 2))
+  )
+
+flextable(stats_PLAT) |>
+  set_header_labels(
+    ARM = "Группа",
+    PLAT_mean = "Среднее (×10⁹/л)",
+    PLAT_SD = "SD (×10⁹/л)",
+    PLAT_25_q = "Q1 (×10⁹/л)",
+    PLAT_mediana = "Медиана (×10⁹/л)",
+    PLAT_75_q = "Q3 (×10⁹/л)",
+    PLAT_min = "Min (×10⁹/л)",
+    PLAT_max = "Max (×10⁹/л)"
+  ) |>
+  set_caption("Описательные статистики уровня тромбоцитов по группам") |>
+  autofit()
+```
+
+
+```{r}
+#Расчитываю описательные статистики для носителей и неносителей аллеля ε4
+df_merged <- df_merged |>
+  mutate(
+    APOE_e4 = if_else(
+      str_detect(gf_genotype_apoe, "ε4"),
+      "Носитель ε4",
+      "Не носитель ε4"
+    )
+  )
+
+stats_HGB <- df_merged |>
+  group_by(APOE_e4) |>
+  summarise(
+    HGB_mean = mean(HGB, na.rm = TRUE),
+    HGB_SD = sd(HGB, na.rm = TRUE),
+    HGB_25_q = quantile(HGB, 0.25, na.rm = TRUE),
+    HGB_mediana = quantile(HGB, 0.5, na.rm = TRUE),
+    HGB_75_q = quantile(HGB, 0.75, na.rm = TRUE),
+    HGB_min = min(HGB, na.rm = TRUE),
+    HGB_max = max(HGB, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  mutate(
+    across(where(is.numeric), ~ round(.x, 2))
+  )
+
+flextable(stats_HGB) |>
+  set_header_labels(
+    APOE_e4 = "Группа",
+    HGB_mean = "Среднее (ммоль/л)",
+    HGB_SD = "SD (ммоль/л)",
+    HGB_25_q = "Q1 (ммоль/л)",
+    HGB_mediana = "Медиана (ммоль/л)",
+    HGB_75_q = "Q3 (ммоль/л)",
+    HGB_min = "Min (ммоль/л)",
+    HGB_max = "Max (ммоль/л)"
+  ) |>
+  set_caption("Описательные статистики уровня гемоглобина по группам") |>
+  autofit()
+
+stats_PLAT <- df_merged |>
+  group_by(APOE_e4) |>
+  summarise(
+    PLAT_mean = mean(PLAT, na.rm = TRUE),
+    PLAT_SD = sd(PLAT, na.rm = TRUE),
+    PLAT_25_q = quantile(PLAT, 0.25, na.rm = TRUE),
+    PLAT_mediana = quantile(PLAT, 0.5, na.rm = TRUE),
+    PLAT_75_q = quantile(PLAT, 0.75, na.rm = TRUE),
+    PLAT_min = min(PLAT, na.rm = TRUE),
+    PLAT_max = max(PLAT, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  mutate(
+    across(where(is.numeric), ~ round(.x, 2))
+  )
+
+flextable(stats_PLAT) |>
+  set_header_labels(
+    APOE_e4 = "Группа",
+    PLAT_mean = "Среднее (×10⁹/л)",
+    PLAT_SD = "SD (×10⁹/л)",
+    PLAT_25_q = "Q1 (×10⁹/л)",
+    PLAT_mediana = "Медиана (×10⁹/л)",
+    PLAT_75_q = "Q3 (×10⁹/л)",
+    PLAT_min = "Min (×10⁹/л)",
+    PLAT_max = "Max (×10⁹/л)"
+  ) |>
+  set_caption("Описательные статистики уровня тромбоцитов по группам") |>
+  autofit()
+```
+### Краткие итоги
+При сравнении групп "Плацебо" и "Низкие дозы Ксаномелина" уровень гемоглобина практически не различается. Среднее значение в обеих группах составляет 8,62 ммоль/л, медианы близки (8,63 и 8,56), разброс и диапазоны сопоставимы. Уровень тромбоцитов в группе Ксаномелина несколько ниже, чем в группе плацебо. Среднее 233,8 против 250,3 ×10⁹/л, медиана 228 против 242.
+
+Похожая картина наблюдается при сравнении носителей и не носителей аллеля ε4. У носителей гемоглобин немного выше (среднее 8,72 против 8,53 ммоль/л, медиана 8,69 против 8,56). Однако разница составляет около 0,2 ммоль/л, то есть, вероятно, различия клинически незначимы. Тромбоциты у носителей ε4, напротив, ниже.Среднее 233,7 против 250,0 ×10⁹/л, медиана 230 против 245. У не носителей шире разброс (SD 67 против 56) и встречаются более высокие значения (максимум 572 против 389). Максимум 572 ×10⁹/л совпадает в обеих таблицах, поэтому, вероятно, это один и тот же пациент из группы плацебо без ε4. В обоих сравнениях минимальные значения тромбоцитов опускаются ниже 150 ×10⁹/л, то есть встречаются случаи лёгкой тромбоцитопении.
+
+
+### 3.2. Анализ витальных показателей
+
+1. Рассчитайте BMI на скрининге.
+2. Создайте категорию BMI: норма для значений в диапазоне [18.5, 25) и не норма для значений вне этого диапазона.
+3. Представьте BMI по группам лечения в двух вариантах:
+   - как количественный показатель со следующими отформатированными статистиками:
+      - число непустых значений
+      - число пропущенных значений
+      - среднее (стандартное отклонение)
+      - медиана [25-й, 75-й процентили]
+      - минимум - максимум
+   - как категорию норма / не норма:
+      - число участников (процент).
+4. Вычислите число аллелей ε4 (0 / 1 / 2) у каждого участника и представьте BMI по этим категориям.
+5. Оформите результаты в таблицы `flextable` с заголовками на русском или английском языке.
+6. Кратко прокомментируйте результаты, приведённые в таблицах.
+
+```{r}
+# 1. Рассчитайте BMI на скрининге.
+df_merged <- df_merged |>
+  mutate(
+    BMI = `WEIGHT_SCREENING 1` / (`HEIGHT_SCREENING 1` / 100)^2
+  )
+
+# 2. Создайте категорию BMI: норма для значений в диапазоне [18.5, 25) и не норма для значений вне этого диапазона.
+
+df_merged <- df_merged |>
+  mutate(
+    BMI_cat = if_else(
+      BMI >= 18.5 & BMI < 25,
+      "Норма [18.5, 25)",
+      "Не норма"
+    )
+  )
+```
+
+```{r}
+# 3.1 BMI как количественный показатель со следующими отформатированными статистиками:
+bmi_stats_ARM <- df_merged |>
+  group_by(ARM) |>
+  summarise(
+    `N (пропуски)` = str_c(sum(!is.na(BMI)), " (", sum(is.na(BMI)), ")"),
+    `Среднее (SD)` = str_c(
+      round(mean(BMI, na.rm = TRUE), 2),
+      " (",
+      round(sd(BMI, na.rm = TRUE), 2),
+      ")"
+    ),
+    `Медиана [Q1, Q3]` = str_c(
+      round(median(BMI, na.rm = TRUE), 2),
+      " [",
+      round(quantile(BMI, 0.25, na.rm = TRUE), 2),
+      ", ",
+      round(quantile(BMI, 0.75, na.rm = TRUE), 2),
+      "]"
+    ),
+    `Мин – Макс` = str_c(
+      round(min(BMI, na.rm = TRUE), 2),
+      " – ",
+      round(max(BMI, na.rm = TRUE), 2)
+    ),
+    .groups = "drop"
+  )
+
+flextable(bmi_stats_ARM) |>
+  set_caption("BMI на визите SCREENING 1 по группам лечения, кг/м²") |>
+  set_header_labels(ARM = "Группа лечения") |>
+  autofit()
+
+# 3.2 BMI как категория норма / не норма:
+
+bmi_cat_ARM <- df_merged |>
+  filter(!is.na(BMI_cat), !is.na(ARM)) |>
+  count(ARM, BMI_cat) |>
+  group_by(ARM) |>
+  mutate(
+    `N (%)` = str_c(n, " (", round(100 * n / sum(n), 1), "%)")
+  ) |>
+  ungroup() |>
+  select(
+    `Группа лечения` = ARM,
+    `Категория BMI` = BMI_cat,
+    `N (%)`
+  )
+
+flextable(bmi_cat_ARM) |>
+  set_caption("Категории BMI на визите SCREENING 1 по группам лечения") |>
+  autofit()
+```
+
+```{r}
+# 4. Вычислите число аллелей ε4 (0 / 1 / 2) у каждого участника.
+df_merged <- df_merged |>
+  mutate(
+    e4_count = case_when(
+      is.na(gf_genotype_apoe) ~ NA_character_,
+      str_count(gf_genotype_apoe, "ε4") == 0 ~ "0 аллелей",
+      str_count(gf_genotype_apoe, "ε4") == 1 ~ "1 аллель",
+      str_count(gf_genotype_apoe, "ε4") == 2 ~ "2 аллели"
+    )
+  )
+```
+
+```{r}
+# 4. BMI по числу аллелей ε4.
+
+bmi_stats_e4 <- df_merged |>
+  filter(!is.na(e4_count)) |>
+  group_by(e4_count) |>
+  summarise(
+    `N (пропуски)` = str_c(sum(!is.na(BMI)), " (", sum(is.na(BMI)), ")"),
+    `Среднее (SD)` = str_c(
+      round(mean(BMI, na.rm = TRUE), 2),
+      " (",
+      round(sd(BMI, na.rm = TRUE), 2),
+      ")"
+    ),
+    `Медиана [Q1, Q3]` = str_c(
+      round(median(BMI, na.rm = TRUE), 2),
+      " [",
+      round(quantile(BMI, 0.25, na.rm = TRUE), 2),
+      ", ",
+      round(quantile(BMI, 0.75, na.rm = TRUE), 2),
+      "]"
+    ),
+    `Мин – Макс` = str_c(
+      round(min(BMI, na.rm = TRUE), 2),
+      " – ",
+      round(max(BMI, na.rm = TRUE), 2)
+    ),
+    .groups = "drop"
+  )
+
+flextable(bmi_stats_e4) |>
+  set_caption("BMI на визите SCREENING 1 по числу аллелей ε4, кг/м²") |>
+  set_header_labels(e4_count = "Число аллелей ε4") |>
+  autofit()
+```
+
+6. BMI по количественным показателям.
+из 170 участников BMI в пределах нормы имели 101 участник. в группе Placebo - 55 человек (64%),  Xanomeline Low Dose - 46 человек (54.8%). Разница составляет 9.2 процентных пункта. 
+в количественных статистиках средние значения и стандартные отклонения несколько отличаются. Средние различаются на 1.32 кг/м² (24.97(Xanomeline Low Dose) − 23.65(Placebo)). В обеих группах стандартные отклонения близки и указывают на сопоставимый разброс.
+Более выраженные различия видны в верхнем квартиле: Q3 составляет 25.72 в Placebo и 27.91 в Xanomeline Low Dose (разница 2.19 кг/м²) что показывает, что распределение сдвинулось вправо в группе Хanomeline Low Dose. Это указывает на различия между группами по BMI на исходном этапе (дисбаланс baseline).
+
+BMI по числу аллелей ε4.
+89 участников (52.4%) не имеют аллеля ε4, 78 (45.9%) — одну аллель, 3 (1.8%) — две аллели ε4. Подгруппа с двумя аллелями ε4 включает всего 3 человека, что не позволяет делать статистически надёжные выводы.
+
+### 3.3. Анализ генотипа
+
+1. Для каждой группы лечения рассчитайте число и процент участников с каждым генотипом APOE.
+2. В одной таблице рассчитайте статистики BMI и лабораторных показателей в зависимости от генотипа APOE:
+   - число непустых значений
+   - число пропущенных значений
+   - среднее (стандартное отклонение)
+   - медиана [25-й, 75-й процентили]
+   - минимум - максимум
+3. Оформите результаты в `flextable` с заголовками на русском или английском языке, укажите единицы измерения.
+4. Кратко прокомментируйте результаты, приведённые в таблицах. У 170 участников исследования наиболее частые генотипы ε3/ε3 (68) и ε3/ε4 (69). Единичные генотипы ε2/ε4 (9) и ε4/ε4 (3).  У частых групп (ε3/ε3 и ε3/ε4) ВMI, гемоглобин и тромбоциты интервалы Q1–Q3 в основном перекрываются.   
+В группе Placebo больше ε3/ε3 (47,7%), в группе Xanomeline Low Dose — ε3/ε4 (45,2%).
+
+```{r}
+apoe_arm <- df_merged |>
+  select(ID, ARM, gf_genotype_apoe) #выбрал строки
+
+stopifnot(nrow(apoe_arm) == n_distinct(apoe_arm$ID)) #проверил
+
+apoe_counts <- apoe_arm |>
+  count(ARM, gf_genotype_apoe) #посчитал
+
+
+apoe_percent_arm <- apoe_counts |>
+  group_by(ARM) |>
+  mutate(percent = round(n / sum(n) * 100, 1)) |>
+  ungroup() #посчитал проценты
+
+#apoe_percent_arm |>
+#group_by(ARM) |>
+#summarise(total_percent = sum(percent)) # проверка, если надо будет
+
+flextable(apoe_percent_arm)
+```
+
+```{r}
+# colnames(df_merged)
+
+#summary(df_merged$`HEIGHT_SCREENING 1`)
+
+df_merged <- df_merged |>
+  mutate(BMI = `WEIGHT_SCREENING 1` / (`HEIGHT_SCREENING 1` / 100)^2) #рассчет ИМТ
+
+# summary(df_merged$BMI)
+
+bmi_lab_long <- df_merged |>
+  select(ID, gf_genotype_apoe, BMI, HGB, PLAT) |>
+  pivot_longer(
+    cols = c(BMI, HGB, PLAT),
+    names_to = "parameter",
+    values_to = "value"
+  ) #в длинный формат, чтобы удобнее считать
+
+# bmi_lab_long |> count("parameter")
+
+bmi_lab_apoe <- bmi_lab_long |>
+  group_by(gf_genotype_apoe, parameter) |>
+  summarise(
+    n_available = sum(!is.na(value)),
+    n_na = sum(is.na(value)),
+    mean_value = mean(value, na.rm = TRUE),
+    sd_value = sd(value, na.rm = TRUE),
+    median_value = median(value, na.rm = TRUE),
+    q25_value = quantile(value, 0.25, na.rm = TRUE),
+    q75_value = quantile(value, 0.75, na.rm = TRUE),
+    min_value = min(value, na.rm = TRUE),
+    max_value = max(value, na.rm = TRUE)
+  ) |>
+  ungroup() |>
+  mutate(
+    parameter = case_when(
+      parameter == "BMI" ~ "BMI, кг/м²",
+      parameter == "HGB" ~ "HGB, г/дл",
+      parameter == "PLAT" ~ "PLAT, ×10⁹/л",
+      TRUE ~ parameter
+    )
+  )
+
+ft_apoe <- bmi_lab_apoe |>
+  arrange(parameter, gf_genotype_apoe) |>
+  flextable() |>
+  colformat_double(i = ~ startsWith(parameter, "BMI"), digits = 2) |>
+  colformat_double(i = ~ startsWith(parameter, "HGB"), digits = 1) |>
+  colformat_double(i = ~ startsWith(parameter, "PLAT"), digits = 0) |>
+  set_header_labels(
+    gf_genotype_apoe = "Генотип APOE",
+    parameter = "Показатель",
+    n_available = "N",
+    n_na = "NA",
+    mean_value = "Среднее",
+    sd_value = "SD",
+    median_value = "Медиана",
+    q25_value = "Q1 (25%)",
+    q75_value = "Q3 (75%)",
+    min_value = "Мин.",
+    max_value = "Макс."
+  ) |>
+  merge_v(j = "parameter") |> # сгруппировал параметры
+  valign(j = "parameter", valign = "top", part = "body") |> # выровнял по высоте параметры
+  hline(i = c(5, 10), border = officer::fp_border(width = 1)) |> # линии-разделители в таблице
+  set_caption("BMI и лабораторные показатели в зависимости от генотипа APOE") |>
+  add_footer_lines(
+    "SD — стандартное отклонение; Q1, Q3 — 25-й и 75-й процентили; N — число не пустых значений."
+  )
+
+ft_apoe
+```
+
+## 4. Дополнительные задания
+
+### 4.1 Функции
+
+Напишите функцию для вычисления типовой таблицы из раздела 3.
+
+Напишем функцию для вычисления типовой таблицы описательных статистик.
+
+```{r}
+my_summary <- function(df, group_var, value_var) {
+  df |>
+    group_by(.data[[group_var]]) |>
+    summarise(
+      n = sum(!is.na(.data[[value_var]])),
+      mean = round(mean(.data[[value_var]], na.rm = TRUE), 2),
+      sd = round(sd(.data[[value_var]], na.rm = TRUE), 2),
+      median = round(median(.data[[value_var]], na.rm = TRUE), 2),
+      q1 = round(quantile(.data[[value_var]], 0.25, na.rm = TRUE), 2),
+      q3 = round(quantile(.data[[value_var]], 0.75, na.rm = TRUE), 2),
+      iqr = round(IQR(.data[[value_var]], na.rm = TRUE), 2),
+      .groups = "drop"
+    ) |>
+    flextable()
+}
+
+my_summary(df_merged, "ARM", "BMI")
+```
+
+### 4.2. Визуализация
+
+Проиллюстрируйте каждую из таблиц раздела 3 одним или несколькими графиками.
+
+### Уровень гемоглобина по группам лечения и генотипу APOE
+
+```{r}
+# Гемоглобин: палитра Teal & Coral с контрастными черными точками
+ggplot(df_merged, aes(x = ARM, y = HGB, fill = ARM)) +
+  # Полупрозрачные боксплоты
+  geom_boxplot(alpha = 0.6, width = 0.5, outlier.shape = NA, color = "black") +
+  # Черные точки поверх коробок
+  geom_point(
+    position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8),
+    size = 1.3,
+    alpha = 0.7,
+    color = "#111111"
+  ) +
+  # Фасетирование по генотипам APOE
+  facet_wrap(~gf_genotype_apoe) +
+  # Палитра Teal & Coral
+  scale_fill_manual(values = c("#008080", "#ff6f59")) +
+  labs(
+    title = "Распределение уровня гемоглобина по группам лечения и генотипу APOE",
+    x = "Группа лечения",
+    y = "Гемоглобин (г/дл)"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title = element_text(face = "bold", size = 12, hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(face = "bold", size = 10),
+    legend.position = "none"
+  )
+```
+
+**Комментарий к визуализации:**
+Сравнение распределения уровня гемоглобина (HGB) между группами лечения в разрезе генетических подгрупп демонстрирует стабильность показателей. Для основных генотипов ($\varepsilon 3/\varepsilon 3$, $\varepsilon 3/\varepsilon 4$) характерно полное перекрытие интервалов распределения плацебо и терапевтической группы, что указывает на отсутствие эффекта препарата на данный параметр. Анализ редких подгрупп ограничен меньшим объемом выборки, что учитывается при общей оценке безопасности и эффективности.
+
+### Уровень тромбоцитов по группам лечения и генотипу APOE
+
+```{r}
+# График с разделением по генотипу через фасетирование
+ggplot(df_merged, aes(x = ARM, y = PLAT, fill = ARM)) +
+  # Полупрозрачные боксплоты с фиксированным цветом контура
+  geom_boxplot(alpha = 0.6, width = 0.5, outlier.shape = NA, color = "black") +
+  # Точки контрастного черного цвета с разбросом
+  geom_point(
+    position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8),
+    size = 1.2,
+    alpha = 0.7,
+    color = "#111111"
+  ) +
+  facet_wrap(~gf_genotype_apoe) +
+  # Палитра Teal & Coral
+  scale_fill_manual(values = c("#008080", "#ff6f59")) +
+  labs(
+    title = "Уровень тромбоцитов по группам лечения и генотипу APOE",
+    x = "Группа лечения",
+    y = "Тромбоциты (x10⁹/л)"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title = element_text(face = "bold", size = 12, hjust = 0.5),
+    legend.position = "none",
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(face = "bold", size = 10)
+  )
+```
+
+**Комментарий к визуализации:**
+Стратификация уровня тромбоцитов по генотипам APOE показывает сопоставимость показателей между группами лечения в основных подгруппах($\varepsilon 3/\varepsilon 3$, $\varepsilon 3/\varepsilon 4$). В редких генотипических группах (например, $\varepsilon 4/\varepsilon 4$) наблюдается выраженное ограничение объема выборки, что требует осторожности при интерпретации различий и исключает возможность сделать статистически надежные выводы для этих подгруп.<br>
+
+### Сводный анализ лабораторных показателей по группам лечения и генотипу APOE
+
+```{r}
+df_long <- lb_wide |>
+  left_join(dm, by = "ID") |>
+  left_join(gf_wide, by = "ID") |>
+  pivot_longer(
+    cols = c(HGB, PLAT),
+    names_to = "Parameter_label",
+    values_to = "Value"
+  )
+ggplot(df_long, aes(x = ARM, y = Value, fill = ARM)) +
+  # Полупрозрачные боксплоты
+  geom_boxplot(alpha = 0.6, width = 0.5, outlier.shape = NA, color = "black") +
+  # Контрастные черные точки
+  geom_point(
+    position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8),
+    size = 1.2,
+    alpha = 0.7,
+    color = "#111111"
+  ) +
+  facet_grid(Parameter_label ~ gf_genotype_apoe, scales = "free_y") +
+  scale_fill_manual(
+    values = c("#008080", "#ff6f59"),
+    name = "Группа лечения:"
+  ) +
+  labs(
+    title = "Сводный анализ лабораторных показателей по группам лечения и генотипу APOE",
+    subtitle = "Сравнение терапевтической группы и плацебо",
+    x = "Группа лечения",
+    y = NULL
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title = element_text(face = "bold", size = 12, hjust = 0.5),
+    plot.subtitle = element_text(size = 10, hjust = 0.5, color = "grey30"),
+    # Переносим стандартную легенду наверх под заголовок:
+    legend.position = "top",
+    legend.justification = "center",
+    legend.title = element_text(size = 10, face = "bold"),
+    legend.text = element_text(size = 9),
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(face = "bold", size = 10)
+  )
+```
+
+**Комментарий к визуализации:**
+Сравнительный анализ распределения уровня гемоглобина (HGB) и тромбоцитов (PLAT) между группами лечения в разрезе генетических подгрупп (APOE) демонстрирует общую сопоставимость показателей между плацебо и терапевтической группой в основных подгруппах (например, $\varepsilon2/\varepsilon3$, $\varepsilon3/\varepsilon3$). Для большинства подгрупп наблюдается полное пересечение интервалов распределения, что указывает на отсутствие выраженного эффекта препарата на данные гематологические параметры. В редких генотипических подгруппах (в частности, $\varepsilon2/\varepsilon4$ и $\varepsilon4/\varepsilon4$) выявляется значительное ограничение объема выборки, что требует осторожности при интерпретации различий и исключает возможность сделать статистически надежные выводы для этих подгрупп.
+
+### Распределение индекса массы тела (BMI) на скрининге 
+
+```{r}
+library(tidyverse)
+# 1. Рассчитываем BMI, подтягиваем данные и убираем NA в ARM
+vs_wide_bmi <- vs_wide |>
+  mutate(
+    BMI = `WEIGHT_SCREENING 1` / (`HEIGHT_SCREENING 1` / 100)^2
+  ) |>
+  left_join(dm, by = "ID") |>
+  filter(!is.na(ARM))
+
+# 2. Строим график
+ggplot(vs_wide_bmi, aes(x = ARM, y = BMI, fill = ARM)) +
+  geom_boxplot(alpha = 0.6, width = 0.5, outlier.shape = NA, color = "black") +
+  geom_point(
+    position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8),
+    size = 1.2,
+    alpha = 0.7,
+    color = "#111111"
+  ) +
+  scale_fill_manual(
+    values = c("#008080", "#ff6f59"),
+    name = "Группа лечения:"
+  ) +
+  labs(
+    title = "Распределение индекса массы тела (BMI) на скрининге",
+    subtitle = "Сравнение групп терапии и плацебо",
+    x = "Группа лечения",
+    y = "BMI (кг/м²)"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title = element_text(face = "bold", size = 12, hjust = 0.5),
+    plot.subtitle = element_text(size = 10, hjust = 0.5, color = "grey30"),
+    legend.position = "top",
+    legend.justification = "center",
+    legend.title = element_text(size = 10, face = "bold"),
+    legend.text = element_text(size = 9),
+    panel.grid.minor = element_blank()
+  )
+```
+**Комментарий к визуализации:**
+На boxplot-диаграмме представлено сравнение распределения индекса массы тела (BMI) на скрининге между группами терапии (Xanomeline Low Dose) и плацебо. Сопоставление медианных значений, межквартильных диапазонов и рассеяния индивидуальных наблюдений (jitter) указывает на однородность выборки и отсутствие выраженных межгрупповых различий по данному параметру на исходном этапе исследования.
+
+### Соотношение категорий BMI по группам лечения
+
+```{r}
+library(tidyverse)
+
+# 1. Подготавливаем данные: считаем BMI и создаем категорию нормы
+vs_bmi_cat <- vs_wide |>
+  mutate(
+    BMI = `WEIGHT_SCREENING 1` / (`HEIGHT_SCREENING 1` / 100)^2,
+    BMI_cat = if_else(BMI >= 18.5 & BMI < 25, "Норма [18.5, 25)", "Не норма")
+  ) |>
+  left_join(dm, by = "ID") |>
+  filter(!is.na(ARM), !is.na(BMI_cat))
+
+# 2. Строим процентную столбчатую диаграмму (barplot)
+ggplot(vs_bmi_cat, aes(x = ARM, fill = BMI_cat)) +
+  geom_bar(position = "fill", alpha = 0.85, color = "black", width = 0.6) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(
+    values = c("#2a9d8f", "#e76f51"),
+    name = "Категория BMI:"
+  ) +
+  labs(
+    title = "Соотношение категорий BMI по группам лечения",
+    subtitle = "Доли нормальных и ненармальных значений на скрининге",
+    x = "Группа лечения",
+    y = "Процент участников"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title = element_text(face = "bold", size = 12, hjust = 0.5),
+    plot.subtitle = element_text(size = 10, hjust = 0.5, color = "grey30"),
+    legend.position = "top",
+    legend.justification = "center",
+    legend.title = element_text(size = 10, face = "bold"),
+    legend.text = element_text(size = 9),
+    panel.grid.minor = element_blank()
+  )
+```
+
+**Комментарий к визуализации:**
+На процентной столбчатой диаграмме представлено распределение долей участников с нормальными в диапазоне [18.5, 25] и ненармальными значениями индекса массы тела на этапе скрининга в разрезе групп лечения. Соотношение категорий демонстрирует сбалансированность исследуемых групп, что подтверждает сопоставимость когорт по антропометрическому признаку до начала терапевтического вмешательства.
+
+### Распределение BMI в зависимости от генотипа APOE
+
+```{r}
+library(tidyverse)
+
+# 1. Рассчитываем BMI, подтягиваем демографию (dm) и генетику (gf_wide)
+bmi_apoe_data <- vs_wide |>
+  mutate(
+    BMI = `WEIGHT_SCREENING 1` / (`HEIGHT_SCREENING 1` / 100)^2
+  ) |>
+  left_join(dm, by = "ID") |>
+  left_join(gf_wide, by = "ID")
+
+# 2. Строим график распределения BMI в зависимости от генотипа APOE
+ggplot(
+  bmi_apoe_data |> filter(!is.na(BMI), !is.na(gf_genotype_apoe)),
+  aes(x = gf_genotype_apoe, y = BMI, fill = gf_genotype_apoe)
+) +
+  geom_boxplot(alpha = 0.6, width = 0.5, outlier.shape = NA, color = "black") +
+  geom_point(
+    position = position_jitter(width = 0.15),
+    size = 1.2,
+    alpha = 0.7,
+    color = "#111111"
+  ) +
+  scale_fill_manual(
+    values = c("#008080", "#ff6f59", "#e9c46a", "#2a9d8f", "#457b9d"),
+    name = "Генотип APOE:"
+  ) +
+  labs(
+    title = "Распределение BMI в зависимости от генотипа APOE",
+    subtitle = "Анализ подгрупп по генетическому фактору",
+    x = "Генотип APOE",
+    y = "BMI (кг/м²)"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title = element_text(face = "bold", size = 12, hjust = 0.5),
+    plot.subtitle = element_text(size = 10, hjust = 0.5, color = "grey30"),
+    legend.position = "top",
+    legend.justification = "center",
+    legend.title = element_text(size = 10, face = "bold"),
+    legend.text = element_text(size = 9),
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 25, hjust = 1) # повернут подписи, если названий много
+  )
+```
+**Комментарий к визуализации:**
+На графике отражено распределение индекса массы тела (BMI) в разрезе основных генотипов APOE ($\varepsilon2/\varepsilon3$, $\varepsilon2/\varepsilon4$, $\varepsilon3/\varepsilon3$, $\varepsilon3/\varepsilon4$, $\varepsilon4/\varepsilon4$). Медианные показатели и межквартильный размах в подгруппах позволяют оценить антропометрическую характеристику участников с учётом генетического фактора. Наложение индивидуальных точек (jitter) обеспечивает визуальный контроль плотности данных и подтверждает репрезентативность выборок в сформированных генетических категориях.
+
+### Расделение BMI в зависимости от генотипа APOE и группам лечения  
+```{r}
+library(tidyverse)
+
+# 1. Объединяем данные, считаем BMI и убираем пропуски
+bmi_apoe_data <- vs_wide |>
+  mutate(
+    BMI = `WEIGHT_SCREENING 1` / (`HEIGHT_SCREENING 1` / 100)^2
+  ) |>
+  left_join(dm, by = "ID") |>
+  left_join(gf_wide, by = "ID") |>
+  filter(!is.na(BMI), !is.na(gf_genotype_apoe), !is.na(ARM))
+
+# 2. Считаем количество участников в каждой комбинации (Генотип + Группа) для подписи N
+counts_lab <- bmi_apoe_data |>
+  count(gf_genotype_apoe) |>
+  mutate(label = str_c(gf_genotype_apoe, "\n(N = ", n, ")"))
+
+x_labels <- setNames(counts_lab$label, counts_lab$gf_genotype_apoe)
+
+# 3. Строим график с группировкой по ARM внутри каждого генотипа
+ggplot(bmi_apoe_data, aes(x = gf_genotype_apoe, y = BMI, fill = ARM)) +
+  geom_boxplot(
+    alpha = 0.6,
+    width = 0.6,
+    outlier.shape = NA,
+    color = "black",
+    position = position_dodge(0.8, preserve = "single") # Добавлен preserve = "single"
+  ) +
+  geom_point(
+    position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8),
+    size = 1.2,
+    alpha = 0.7,
+    color = "#111111"
+  ) +
+  scale_x_discrete(labels = x_labels) +
+  scale_fill_manual(
+    values = c("#008080", "#ff6f59"),
+    name = "Группа лечения:"
+  ) +
+  labs(
+    title = "Распределение BMI в зависимости от генотипа APOE и группы лечения",
+    subtitle = "Анализ баланса антропометрических показателей в генетических подгруппах",
+    x = "Генотип APOE",
+    y = "BMI (кг/м²)"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title = element_text(face = "bold", size = 12, hjust = 0.5),
+    plot.subtitle = element_text(size = 10, hjust = 0.5, color = "grey30"),
+    legend.position = "top",
+    legend.justification = "center",
+    legend.title = element_text(size = 10, face = "bold"),
+    legend.text = element_text(size = 9),
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(size = 9)
+  )
+
+```
+
+** Комментарий к визуализации:**.  
+ 
+На графике представлено распределение индекса массы тела (BMI) на скрининге в разрезе основных генотипов APOE и групп лечения (Placebo и Xanomeline Low Dose). Сопоставление медианных значений и межквартильных диапазонов в основных генетических подгруппах ($\varepsilon3/\varepsilon3$ и $\varepsilon3/\varepsilon4$) демонстрирует хороший исходный баланс между ветками исследования. Наличие индивидуальных точек (jitter) и указание размера выборки ($N$) на оси X позволяют наглядно оценить плотность данных и выявить ограничения по редким подгруппам (например, в группе $\varepsilon4/\varepsilon4$ с $N = 3$ наблюдения представлены односторонне), что необходимо учитывать при интерпретации результатов.
+
+
+
+### Распределение генотипов APOE по группам лечения
+```{r}
+library(tidyverse)
+
+# 1. Объединяем данные демографии и генетики
+apoe_arm_data <- dm |>
+  left_join(gf_wide, by = "ID") |>
+  filter(!is.na(ARM), !is.na(gf_genotype_apoe))
+
+# 2. Строим процентную диаграмму распределения генотипов по группам
+ggplot(apoe_arm_data, aes(x = ARM, fill = gf_genotype_apoe)) +
+  geom_bar(position = "fill", alpha = 0.85, color = "black", width = 0.6) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(
+    values = c("#2a9d8f", "#e76f51", "#e9c46a", "#457b9d", "#f4a261"),
+    name = "Генотип APOE:"
+  ) +
+  labs(
+    title = "Распределение генотипов APOE по группам лечения",
+    subtitle = "Сравнение долей генетических вариантов в исследуемых группах",
+    x = "Группа лечения",
+    y = "Процент участников"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title = element_text(face = "bold", size = 12, hjust = 0.5),
+    plot.subtitle = element_text(size = 10, hjust = 0.5, color = "grey30"),
+    legend.position = "top",
+    legend.justification = "center",
+    legend.title = element_text(size = 10, face = "bold"),
+    legend.text = element_text(size = 9),
+    panel.grid.minor = element_blank()
+  )
+```
+
+**Комментарий к визуализации:**
+На процентной столбчатой диаграмме отражено распределение долей генетических вариантов гена APOE в разрезе групп терапии (Placebo и Xanomeline Low Dose). Структура соотношений подгрупп демонстрирует сопоставимость исследуемых групп по генетическому профилю, что исключает потенциальное смещение на исходном этапе анализа.
+
+### Выводы по анализу данных 
+
+* **Сопоставимость групп:** Сравнение показателей гемоглобина (HGB) и тромбоцитов (PLAT) на фоне визита WEEK 4 позволяет оценить безопасность терапии и убедиться в отсутствии значимых гематологических отклонений между группами плацебо и низкой дозы ксаномелина.
+
+* **Динамика веса:** Использование данных визита WEEK 4 дает возможность проанализировать кратковременные изменения массы тела и антропометрических параметров участников после месяца терапевтического вмешательства.
+
+* **Гематологический профиль:** Анализ ключевых показателей крови (HGB и PLAT) подтверждает стабильность кроветворной системы пациентов в исследуемых подгруппах на данном этапе клинического исследования.
+
+### 4.3. Таблицы 
+```{r}
+tables_lab <- df_merged |>
+  select(ARM, HGB, PLAT) |>
+  drop_na() |>
+  tbl_summary(
+    by = ARM,
+    label = list(
+      HGB ~ "Гемоглобин, ммоль/л",
+      PLAT ~ "Тромбоциты, ×10⁹/л"
+    )
+  ) |>
+  modify_header(
+    label ~ "Показатель",
+    stat_1 ~ "Плацебо",
+    stat_2 ~ "Низкие дозы Ксаномелина"
+  ) |>
+  modify_caption("Лабораторные показатели по группам лечения") |>
+  modify_footnote(
+    all_stat_cols() ~ "Данные представлены как медиана (Q1; Q3)"
+  )
+
+tables_lab
+
+
+tables_vit <- df_merged |>
+  select(ARM, `HEIGHT_SCREENING 1`, `WEIGHT_SCREENING 1`, `WEIGHT_WEEK 4`) |>
+  drop_na() |>
+  tbl_summary(
+    by = ARM,
+    statistic = all_continuous() ~ "{mean} ({sd})",
+    label = list(
+      `HEIGHT_SCREENING 1` ~ "Рост, см",
+      `WEIGHT_SCREENING 1` ~ "Вес при скрининге, кг",
+      `WEIGHT_WEEK 4` ~ "Вес через 4 недели, кг"
+    )
+  ) |>
+  modify_header(
+    label ~ "Показатель",
+    stat_1 ~ "Плацебо",
+    stat_2 ~ "Низкие дозы Ксаномелина"
+  ) |>
+  modify_caption("Рост и вес по группам лечения") |>
+  modify_footnote(
+    all_stat_cols() ~ "Данные представлены как среднее (стандартное отклонение)"
+  )
+
+tables_vit
+```
+
+### 4.4. Заполнение пропущенных значений
+
+Создайте и загрузите на GitHub экспериментальную ветку `imputation`.
+В этой ветке перед разделом 3 заполните пропущенные значения количественных показателей, используемых в анализе, средним значением показателя в группе по полу и возрасту.
+Используйте возрастные группы 50-59, 60-69, 70-79 и 80-89 лет.
+В дальнейшем анализе используйте датафрейм после заполнения пропусков.
+
+### 4.5. Оформите README.md
+
+Замените содержимое README.md кратким описание команды, кто какие пункты выполнил
